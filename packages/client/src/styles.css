@@ -186,8 +186,30 @@ button.secondary {
   pointer-events: none;
   background: radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
 }
-.strategic-map { display: block; cursor: crosshair; }
+.map-viewport { position: relative; width: 100%; height: 100%; }
+.strategic-map { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.strategic-map:active { cursor: grabbing; }
 .strategic-map.targeting { cursor: cell; }
+.map-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 5;
+}
+.map-controls button {
+  width: 28px;
+  height: 28px;
+  background: rgba(15, 22, 32, 0.85);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.map-controls button:hover { border-color: var(--accent); color: var(--accent); }
 
 .chat-panel {
   background: var(--panel);

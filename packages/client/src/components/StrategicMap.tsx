@@ -1,16 +1,25 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CampaignState, Vector2 } from "@frontline/shared";
 import { TICKS_PER_SEC } from "@frontline/shared";
-import { buildTerrainLayer, VIEW_W, VIEW_H } from "../map/terrain";
+import { ACTION_CENTER, ACTION_H, ACTION_W, WORLD_MAX, WORLD_MIN, buildTerrainLayer } from "../map/terrain";
 import { drawBaseIcon, drawContactIcon, drawScaleBar, drawUnitIcon, unitColor } from "../map/icons";
 
 const TICK_MS = 1000 / TICKS_PER_SEC;
+const MIN_ZOOM = 0.12;
+const MAX_ZOOM = 3.5;
+const DRAG_THRESHOLD = 5; // screen px before a pointer-down counts as a pan, not a click
 
 interface Snapshot {
   timestamp: number;
   units: Map<string, Vector2>;
   convoys: Map<string, Vector2>;
   contacts: Map<string, Vector2>;
+}
+
+interface Camera {
+  x: number;
+  y: number;
+  zoom: number;
 }
 
 function snapshotFrom(state: CampaignState, timestamp: number): Snapshot {
@@ -30,6 +39,15 @@ function interpolated(id: string, current: Vector2, prev: Snapshot | null, cur: 
   const from = prev?.[map].get(id);
   if (!from || !cur) return current;
   return lerpPos(from, current, t);
+}
+
+function clampCamera(cam: Camera): Camera {
+  const margin = 400;
+  return {
+    x: Math.min(Math.max(cam.x, WORLD_MIN.x - margin), WORLD_MAX.x + margin),
+    y: Math.min(Math.max(cam.y, WORLD_MIN.y - margin), WORLD_MAX.y + margin),
+    zoom: Math.min(Math.max(cam.zoom, MIN_ZOOM), MAX_ZOOM),
+  };
 }
 
 export default function StrategicMap({
@@ -56,6 +74,10 @@ export default function StrategicMap({
   const pendingRef = useRef(pendingOrder);
   const roleRef = useRef(myRole);
   const rafRef = useRef<number | undefined>(undefined);
+  const cameraRef = useRef<Camera | null>(null);
+  const [, forceRender] = useState(0); // only used so the RECENTER button re-mounts cleanly
+
+  const dragRef = useRef<{ pointerId: number; startScreen: Vector2; startCamera: Camera; dragDistance: number } | null>(null);
 
   useEffect(() => {
     stateRef.current = state;
@@ -87,18 +109,42 @@ export default function StrategicMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.tick]);
 
+  function recenter() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const zoom = Math.min(rect.width / (ACTION_W + 320), rect.height / (ACTION_H + 320));
+    cameraRef.current = clampCamera({ x: ACTION_CENTER.x, y: ACTION_CENTER.y, zoom: zoom || 0.6 });
+    forceRender((n) => n + 1);
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = VIEW_W * dpr;
-    canvas.height = VIEW_H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let lastCssW = 0;
+    let lastCssH = 0;
 
     function draw() {
       const s = stateRef.current;
+      const rect = canvas!.getBoundingClientRect();
+      const cssW = rect.width || 1;
+      const cssH = rect.height || 1;
+      if (cssW !== lastCssW || cssH !== lastCssH) {
+        canvas!.width = Math.round(cssW * dpr);
+        canvas!.height = Math.round(cssH * dpr);
+        lastCssW = cssW;
+        lastCssH = cssH;
+        if (!cameraRef.current) recenter();
+      }
+      if (!cameraRef.current) {
+        rafRef.current = requestAnimationFrame(draw);
+        return;
+      }
+      const cam = cameraRef.current;
+
       const terrain = terrainRef.current;
       const prevSnap = prevSnapRef.current;
       const curSnap = curSnapRef.current;
@@ -108,8 +154,14 @@ export default function StrategicMap({
       const selected = selectionRef.current;
       const targeting = !!pendingRef.current;
 
-      ctx!.clearRect(0, 0, VIEW_W, VIEW_H);
-      if (terrain) ctx!.drawImage(terrain, 0, 0);
+      // clear in screen space
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx!.clearRect(0, 0, cssW, cssH);
+
+      // world-space transform (pan + zoom)
+      ctx!.setTransform(dpr * cam.zoom, 0, 0, dpr * cam.zoom, dpr * (cssW / 2 - cam.x * cam.zoom), dpr * (cssH / 2 - cam.y * cam.zoom));
+
+      if (terrain) ctx!.drawImage(terrain, WORLD_MIN.x, WORLD_MIN.y, WORLD_MAX.x - WORLD_MIN.x, WORLD_MAX.y - WORLD_MIN.y);
 
       // convoy route lines + moving marker
       for (const convoy of s.convoys) {
@@ -119,7 +171,7 @@ export default function StrategicMap({
           ctx!.beginPath();
           ctx!.moveTo(from.position.x, from.position.y);
           ctx!.lineTo(to.position.x, to.position.y);
-          ctx!.strokeStyle = "rgba(224,196,58,0.35)";
+          ctx!.strokeStyle = "rgba(224,196,58,0.4)";
           ctx!.setLineDash([4, 4]);
           ctx!.lineWidth = 1;
           ctx!.stroke();
@@ -135,10 +187,8 @@ export default function StrategicMap({
         ctx!.shadowBlur = 0;
       }
 
-      // bases
       for (const base of s.bases) drawBaseIcon(ctx!, base);
 
-      // enemy contacts (fog of war)
       for (const contact of s.contacts) {
         if (contact.status === "lost" && s.tick - contact.lastSeenTick > 40) continue;
         const pos = interpolated(contact.id, contact.position, prevSnap, curSnap, "contacts", t);
@@ -152,7 +202,6 @@ export default function StrategicMap({
         ctx!.fillText(label, pos.x + 15, pos.y + 5);
       }
 
-      // units
       for (const unit of s.units) {
         const isMine = unit.role === myRoleNow;
         const isSelected = unit.id === selected;
@@ -165,11 +214,12 @@ export default function StrategicMap({
         }
       }
 
-      drawScaleBar(ctx!, VIEW_W, VIEW_H);
-
+      // screen-space overlays (scale bar, targeting tint) — must not scale with zoom
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawScaleBar(ctx!, cssW, cssH, 120 / cam.zoom);
       if (targeting) {
         ctx!.fillStyle = "rgba(58,208,224,0.05)";
-        ctx!.fillRect(0, 0, VIEW_W, VIEW_H);
+        ctx!.fillRect(0, 0, cssW, cssH);
       }
 
       rafRef.current = requestAnimationFrame(draw);
@@ -179,19 +229,51 @@ export default function StrategicMap({
     return () => {
       if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function toWorld(e: React.MouseEvent<HTMLCanvasElement>): Vector2 {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return {
-      x: ((e.clientX - rect.left) / rect.width) * VIEW_W,
-      y: ((e.clientY - rect.top) / rect.height) * VIEW_H,
+  function screenToWorld(clientX: number, clientY: number): Vector2 {
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const cam = cameraRef.current ?? { x: ACTION_CENTER.x, y: ACTION_CENTER.y, zoom: 0.6 };
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+    return { x: cam.x + (sx - rect.width / 2) / cam.zoom, y: cam.y + (sy - rect.height / 2) / cam.zoom };
+  }
+
+  function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!cameraRef.current) return;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startScreen: { x: e.clientX, y: e.clientY },
+      startCamera: { ...cameraRef.current },
+      dragDistance: 0,
     };
   }
 
-  function handleClick(e: React.MouseEvent<HTMLCanvasElement>) {
-    const pos = toWorld(e);
-    const clickedUnit = state.units.find((u) => Math.hypot(u.position.x - pos.x, u.position.y - pos.y) < 14);
+  function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId || !cameraRef.current) return;
+    const dx = e.clientX - drag.startScreen.x;
+    const dy = e.clientY - drag.startScreen.y;
+    drag.dragDistance = Math.max(drag.dragDistance, Math.hypot(dx, dy));
+    const zoom = drag.startCamera.zoom;
+    cameraRef.current = clampCamera({
+      x: drag.startCamera.x - dx / zoom,
+      y: drag.startCamera.y - dy / zoom,
+      zoom,
+    });
+  }
+
+  function handlePointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    if (drag.dragDistance >= DRAG_THRESHOLD) return; // was a pan, not a click
+
+    const pos = screenToWorld(e.clientX, e.clientY);
+    const clickedUnit = state.units.find((u) => Math.hypot(u.position.x - pos.x, u.position.y - pos.y) < Math.max(14, 14 / (cameraRef.current?.zoom ?? 1)));
     if (clickedUnit && clickedUnit.role === myRole && !pendingOrder) {
       onSelectUnit(clickedUnit.id);
       return;
@@ -203,12 +285,61 @@ export default function StrategicMap({
     if (!clickedUnit) onSelectUnit(null);
   }
 
+  // Registered as a native, non-passive listener (see effect below) because
+  // React attaches its synthetic onWheel as passive, which silently breaks
+  // preventDefault and lets the page scroll underneath the map while zooming.
+  function handleWheelNative(e: WheelEvent) {
+    if (!cameraRef.current) return;
+    e.preventDefault();
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const cam = cameraRef.current;
+    const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+    const newZoom = Math.min(Math.max(cam.zoom * factor, MIN_ZOOM), MAX_ZOOM);
+    const worldUnderCursor = {
+      x: cam.x + (e.clientX - rect.left - rect.width / 2) / cam.zoom,
+      y: cam.y + (e.clientY - rect.top - rect.height / 2) / cam.zoom,
+    };
+    cameraRef.current = clampCamera({
+      x: worldUnderCursor.x - (e.clientX - rect.left - rect.width / 2) / newZoom,
+      y: worldUnderCursor.y - (e.clientY - rect.top - rect.height / 2) / newZoom,
+      zoom: newZoom,
+    });
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.addEventListener("wheel", handleWheelNative, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleWheelNative);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function zoomBy(factor: number) {
+    if (!cameraRef.current) return;
+    cameraRef.current = clampCamera({ ...cameraRef.current, zoom: cameraRef.current.zoom * factor });
+  }
+
   return (
-    <canvas
-      ref={canvasRef}
-      className={`strategic-map ${pendingOrder ? "targeting" : ""}`}
-      style={{ width: "100%", height: "100%" }}
-      onClick={handleClick}
-    />
+    <div className="map-viewport">
+      <canvas
+        ref={canvasRef}
+        className={`strategic-map ${pendingOrder ? "targeting" : ""}`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      />
+      <div className="map-controls">
+        <button onClick={() => zoomBy(1.3)} title="Zoom in">
+          +
+        </button>
+        <button onClick={() => zoomBy(1 / 1.3)} title="Zoom out">
+          −
+        </button>
+        <button onClick={recenter} title="Recenter">
+          ⌂
+        </button>
+      </div>
+    </div>
   );
 }
