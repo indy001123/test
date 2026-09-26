@@ -1,0 +1,20 @@
+{
+  "name": "frontline-critical-hour",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/client"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/shared && npm run build -w packages/server && npm run build -w packages/client",
+    "dev:server": "npm run dev -w packages/server",
+    "dev:client": "npm run dev -w packages/client",
+    "test": "npm run test -w packages/server && npm run test -w packages/shared",
+    "smoke": "node scripts/smoke-test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
