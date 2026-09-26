@@ -13,6 +13,10 @@ export const WORLD_MAX: Vector2 = { x: ACTION_CENTER.x + 2400, y: ACTION_CENTER.
 export const WORLD_W = WORLD_MAX.x - WORLD_MIN.x;
 export const WORLD_H = WORLD_MAX.y - WORLD_MIN.y;
 
+// x-position of the Karsan Valley / Sarrow Ridge boundary within the action
+// area (matches the region polygons defined in the server scenario).
+const FRONT_X = 620;
+
 // Deterministic PRNG so the terrain texture never "shimmers" on regeneration.
 function mulberry32(seed: number) {
   let a = seed;
@@ -42,14 +46,42 @@ function paintGround(ctx: CanvasRenderingContext2D, x0: number, y0: number, w: n
   ctx.fillRect(x0, y0, w, h);
 }
 
-function scatterGroundTexture(ctx: CanvasRenderingContext2D, rng: () => number, x0: number, y0: number, w: number, h: number) {
+/** Large, clearly-visible biome patches — rock, dry grass, packed dirt, scree — so the
+ * ground reads as varied terrain even before zooming in, not a flat wash. */
+function paintBiomePatches(ctx: CanvasRenderingContext2D, rng: () => number, x0: number, y0: number, w: number, h: number) {
   const area = w * h;
-  const count = Math.floor(area / 1600);
-  const palette = ["rgba(90,78,58,0.14)", "rgba(60,52,38,0.16)", "rgba(120,106,80,0.08)", "rgba(70,90,60,0.06)"];
+  const count = Math.max(40, Math.floor(area / 26000));
+  const palette = [
+    "rgba(108,96,72,0.4)", // packed dirt
+    "rgba(76,84,58,0.32)", // dry scrub
+    "rgba(130,118,96,0.3)", // rock/scree
+    "rgba(58,50,38,0.4)", // shadowed low ground
+    "rgba(150,132,96,0.22)", // sun-bleached ground
+  ];
   for (let i = 0; i < count; i++) {
     const x = x0 + rng() * w;
     const y = y0 + rng() * h;
-    const r = 10 + rng() * 30;
+    const r = 60 + rng() * 160;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const color = palette[Math.floor(rng() * palette.length)];
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * (0.55 + rng() * 0.35), rng() * Math.PI, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+}
+
+/** Fine detail texture (pebbles/cracked ground) visible once zoomed in. */
+function scatterFineTexture(ctx: CanvasRenderingContext2D, rng: () => number, x0: number, y0: number, w: number, h: number) {
+  const area = w * h;
+  const count = Math.floor(area / 1100);
+  const palette = ["rgba(90,78,58,0.16)", "rgba(60,52,38,0.18)", "rgba(120,106,80,0.1)", "rgba(70,90,60,0.08)"];
+  for (let i = 0; i < count; i++) {
+    const x = x0 + rng() * w;
+    const y = y0 + rng() * h;
+    const r = 6 + rng() * 16;
     ctx.beginPath();
     ctx.ellipse(x, y, r, r * (0.5 + rng() * 0.4), rng() * Math.PI, 0, Math.PI * 2);
     ctx.fillStyle = palette[Math.floor(rng() * palette.length)];
@@ -75,20 +107,20 @@ function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0:
   ctx.closePath();
   const grad = ctx.createLinearGradient(0, yBase - peakHeight, 0, yBase);
   if (hostile) {
-    grad.addColorStop(0, "rgba(72,48,42,0.55)");
-    grad.addColorStop(1, "rgba(40,28,24,0.35)");
+    grad.addColorStop(0, "rgba(90,56,46,0.7)");
+    grad.addColorStop(1, "rgba(46,30,26,0.45)");
   } else {
-    grad.addColorStop(0, "rgba(68,60,48,0.5)");
-    grad.addColorStop(1, "rgba(36,32,24,0.3)");
+    grad.addColorStop(0, "rgba(82,72,54,0.65)");
+    grad.addColorStop(1, "rgba(40,36,26,0.4)");
   }
   ctx.fillStyle = grad;
   ctx.fill();
-  ctx.strokeStyle = "rgba(20,16,12,0.4)";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(15,12,9,0.55)";
+  ctx.lineWidth = 1.2;
   ctx.stroke();
 
   // snow/scree caps on the taller peaks
-  ctx.fillStyle = "rgba(210,205,195,0.15)";
+  ctx.fillStyle = "rgba(210,205,195,0.2)";
   for (let i = 1; i < points.length - 1; i++) {
     const p = points[i];
     if (yBase - p.y > peakHeight * 0.7) {
@@ -101,14 +133,14 @@ function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0:
   }
 }
 
-/** Small decorative rural compound (non-interactive terrain dressing). */
-function drawDecorativeCompound(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number) {
+/** Small decorative rural compound (non-interactive terrain dressing). Optionally ruined. */
+function drawDecorativeCompound(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number, ruined = false) {
   const size = 14 + rng() * 10;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate((rng() - 0.5) * 0.6);
-  ctx.strokeStyle = "rgba(150,135,105,0.35)";
-  ctx.fillStyle = "rgba(70,62,46,0.4)";
+  ctx.strokeStyle = ruined ? "rgba(120,90,80,0.4)" : "rgba(150,135,105,0.35)";
+  ctx.fillStyle = ruined ? "rgba(50,40,34,0.5)" : "rgba(70,62,46,0.4)";
   ctx.lineWidth = 1;
   ctx.strokeRect(-size, -size, size * 2, size * 2);
   const buildings = 1 + Math.floor(rng() * 3);
@@ -118,12 +150,128 @@ function drawDecorativeCompound(ctx: CanvasRenderingContext2D, rng: () => number
     const bw = 5 + rng() * 6;
     const bh = 5 + rng() * 6;
     ctx.fillRect(bx - bw / 2, by - bh / 2, bw, bh);
+    if (ruined) {
+      ctx.strokeStyle = "rgba(200,80,60,0.5)";
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(bx - bw / 2, by - bh / 2);
+      ctx.lineTo(bx + bw / 2, by + bh / 2);
+      ctx.moveTo(bx + bw / 2, by - bh / 2);
+      ctx.lineTo(bx - bw / 2, by + bh / 2);
+      ctx.stroke();
+      ctx.strokeStyle = ruined ? "rgba(120,90,80,0.4)" : "rgba(150,135,105,0.35)";
+    }
   }
   ctx.restore();
 }
 
+/** Scorched bomb crater with a raised rim. */
+function drawCrater(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number) {
+  const r = 6 + rng() * 10;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(15,12,10,0.55)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(90,78,60,0.4)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+/** Burnt-out vehicle wreck: a dark cross-hatched hulk. */
+function drawWreck(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rng() * Math.PI * 2);
+  ctx.fillStyle = "rgba(25,22,20,0.75)";
+  ctx.strokeStyle = "rgba(70,40,30,0.5)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(-7, -4, 14, 8, 1.5);
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(120,60,40,0.4)";
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.moveTo(-6, -3);
+  ctx.lineTo(6, 3);
+  ctx.moveTo(6, -3);
+  ctx.lineTo(-6, 3);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Sandbagged bunker position: a small cluster of stacked-sandbag ellipses. */
+function drawBunker(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  const angle = rng() * Math.PI * 2;
+  ctx.rotate(angle);
+  ctx.fillStyle = "rgba(150,132,96,0.5)";
+  ctx.strokeStyle = "rgba(90,78,58,0.5)";
+  ctx.lineWidth = 0.8;
+  for (let i = -1; i <= 1; i++) {
+    ctx.beginPath();
+    ctx.ellipse(i * 4, 0, 3, 1.8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Zigzag barbed-wire line. */
+function drawWireLine(ctx: CanvasRenderingContext2D, x: number, y0: number, y1: number) {
+  ctx.beginPath();
+  const step = 6;
+  let y = y0;
+  let toggle = 1;
+  ctx.moveTo(x, y);
+  while (y < y1) {
+    y += step;
+    ctx.lineTo(x + toggle * 3, y);
+    toggle *= -1;
+  }
+  ctx.strokeStyle = "rgba(180,170,150,0.35)";
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+}
+
+/** The contested boundary between the two regions: trench line, wire, craters,
+ * wrecks and dug-in positions — this is what should make the map read as an
+ * active front rather than two dots sitting in empty ground. */
+function drawFrontLine(ctx: CanvasRenderingContext2D, rng: () => number) {
+  const yTop = 30;
+  const yBottom = ACTION_H - 20;
+
+  // trench line (double-stroke for a dug earthworks look)
+  ctx.beginPath();
+  ctx.moveTo(FRONT_X, yTop);
+  ctx.lineTo(FRONT_X - 10, ACTION_H * 0.4);
+  ctx.lineTo(FRONT_X + 8, ACTION_H * 0.62);
+  ctx.lineTo(FRONT_X - 4, yBottom);
+  ctx.strokeStyle = "rgba(30,24,18,0.6)";
+  ctx.lineWidth = 5;
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(90,78,58,0.4)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // barbed wire lines on both sides of the trench
+  drawWireLine(ctx, FRONT_X - 22, yTop, yBottom);
+  drawWireLine(ctx, FRONT_X + 20, yTop, yBottom);
+
+  for (let i = 0; i < 14; i++) {
+    const t = rng();
+    const y = yTop + t * (yBottom - yTop);
+    const x = FRONT_X + (rng() - 0.5) * 60;
+    const roll = rng();
+    if (roll < 0.4) drawCrater(ctx, rng, x, y);
+    else if (roll < 0.65) drawBunker(ctx, rng, x, y);
+    else if (roll < 0.85) drawWreck(ctx, rng, x, y);
+  }
+}
+
 function drawGrid(ctx: CanvasRenderingContext2D, x0: number, y0: number, w: number, h: number) {
-  ctx.strokeStyle = "rgba(180,190,170,0.035)";
+  ctx.strokeStyle = "rgba(180,190,170,0.045)";
   ctx.lineWidth = 1;
   const step = 100;
   const startX = Math.floor(x0 / step) * step;
@@ -209,11 +357,22 @@ export function buildTerrainLayer(regions: Region[], bases: Base[]): HTMLCanvasE
   ctx.fillRect(WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
 
   paintGround(ctx, WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
-  scatterGroundTexture(ctx, rng, WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
+  paintBiomePatches(ctx, rng, WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
+  scatterFineTexture(ctx, rng, WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
 
-  // mountain ridgelines ringing and crossing the wider world — this is most
-  // of what makes panning outward feel like a real, huge landscape
-  const rangeCount = 10;
+  // mountain ridgelines: a few anchored close around the action area so the
+  // default view itself doesn't look flat/empty, plus more scattered across
+  // the wider world for when you pan out.
+  const closeRanges: [number, number, number, number, boolean][] = [
+    [ACTION_CENTER.x - 950, ACTION_H - 60, 550, 130, false],
+    [ACTION_CENTER.x + 250, -40, 500, 150, true],
+    [ACTION_CENTER.x - 300, -120, 700, 110, false],
+    [ACTION_CENTER.x + 500, ACTION_H + 40, 600, 120, true],
+  ];
+  for (const [x0, yBase, length, peak, hostile] of closeRanges) {
+    drawMountainRange(ctx, rng, x0, yBase, length, peak, hostile);
+  }
+  const rangeCount = 12;
   for (let i = 0; i < rangeCount; i++) {
     const x0 = WORLD_MIN.x + rng() * WORLD_W * 0.9;
     const yBase = WORLD_MIN.y + rng() * WORLD_H;
@@ -222,18 +381,22 @@ export function buildTerrainLayer(regions: Region[], bases: Base[]): HTMLCanvasE
     drawMountainRange(ctx, rng, x0, yBase, length, peak, rng() > 0.5);
   }
 
-  // scattered decorative rural compounds across the wider world (not
-  // interactive — just makes the huge map feel inhabited when you pan out)
-  for (let i = 0; i < 26; i++) {
+  // scattered decorative compounds — mostly ruined near the front, intact
+  // further out — inhabiting both the action area and the wider world
+  for (let i = 0; i < 40; i++) {
     const x = WORLD_MIN.x + rng() * WORLD_W;
     const y = WORLD_MIN.y + rng() * WORLD_H;
-    if (Math.abs(x - ACTION_CENTER.x) < 700 && Math.abs(y - ACTION_CENTER.y) < 500) continue; // keep the action area clear
-    drawDecorativeCompound(ctx, rng, x, y);
+    const nearBaseA = Math.hypot(x - bases[0]?.position.x, y - bases[0]?.position.y) < 90;
+    const nearBaseB = bases[1] && Math.hypot(x - bases[1].position.x, y - bases[1].position.y) < 90;
+    if (nearBaseA || nearBaseB) continue; // don't overlap the base icons themselves
+    const nearFront = Math.abs(x - FRONT_X) < 200 && y > 0 && y < ACTION_H;
+    drawDecorativeCompound(ctx, rng, x, y, nearFront && rng() > 0.3);
   }
 
   drawGrid(ctx, WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
   drawRoad(ctx, bases);
   drawRiver(ctx);
+  drawFrontLine(ctx, rng);
 
   // region borders + labels only — no flat color wash over the terrain
   for (const region of regions) {
@@ -242,7 +405,7 @@ export function buildTerrainLayer(regions: Region[], bases: Base[]): HTMLCanvasE
     // very subtle texture variance so friendly vs. contested ground reads
     // without a color wash: a faint patrol-track hatching on friendly soil
     if (region.control !== "enemy") {
-      ctx.strokeStyle = "rgba(210,200,170,0.05)";
+      ctx.strokeStyle = "rgba(210,200,170,0.06)";
       ctx.lineWidth = 1;
       for (let i = 0; i < 40; i++) {
         const x = region.path[0].x + rng() * ACTION_W;
