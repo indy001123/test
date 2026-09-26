@@ -35,7 +35,10 @@ export default function App() {
       switch (msg.type) {
         case "joined":
           setPlayerId(msg.playerId);
-          localStorage.setItem(`frontline:${msg.campaignId}:playerId`, msg.playerId);
+          // sessionStorage (not localStorage): scoped to this browser tab only, so
+          // opening a second tab to test multiplayer doesn't reconnect it as the
+          // first tab's existing player. Still survives a refresh of this tab.
+          sessionStorage.setItem(`frontline:${msg.campaignId}:playerId`, msg.playerId);
           break;
         case "lobbyState":
           setPlayers(msg.players);
@@ -64,7 +67,7 @@ export default function App() {
   const joinCampaign = useCallback((code: string, name: string) => {
     const id = code.trim() || randomCampaignCode();
     setCampaignId(id);
-    const savedPlayerId = localStorage.getItem(`frontline:${id}:playerId`) ?? undefined;
+    const savedPlayerId = sessionStorage.getItem(`frontline:${id}:playerId`) ?? undefined;
     socketRef.current?.join(id, name, savedPlayerId);
   }, []);
 
