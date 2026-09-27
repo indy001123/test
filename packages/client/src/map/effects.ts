@@ -24,6 +24,42 @@ export function drawCloudShadows(ctx: CanvasRenderingContext2D, sources: { x: nu
   }
 }
 
+/** A few bright glints that travel along the river's course over time, so
+ * the water reads as flowing rather than a static painted ribbon. */
+export function drawRiverSparkle(ctx: CanvasRenderingContext2D, points: Vector2[], timeMs: number, glintCount = 5) {
+  let totalLen = 0;
+  const segLens: number[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const len = Math.hypot(points[i + 1].x - points[i].x, points[i + 1].y - points[i].y);
+    segLens.push(len);
+    totalLen += len;
+  }
+  if (totalLen === 0) return;
+
+  for (let g = 0; g < glintCount; g++) {
+    const speed = 40; // world units / second
+    const offset = (g / glintCount) * totalLen;
+    const dist = (((timeMs / 1000) * speed + offset) % totalLen + totalLen) % totalLen;
+    let remaining = dist;
+    let seg = 0;
+    while (seg < segLens.length && remaining > segLens[seg]) {
+      remaining -= segLens[seg];
+      seg++;
+    }
+    if (seg >= segLens.length) continue;
+    const a = points[seg];
+    const b = points[seg + 1];
+    const t = segLens[seg] > 0 ? remaining / segLens[seg] : 0;
+    const x = a.x + (b.x - a.x) * t;
+    const y = a.y + (b.y - a.y) * t;
+    const pulse = 0.4 + 0.4 * Math.sin(timeMs / 300 + g * 2);
+    ctx.beginPath();
+    ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(220,240,245,${pulse})`;
+    ctx.fill();
+  }
+}
+
 /** A small compass rose HUD element — screen space, doesn't scale with zoom. */
 export function drawCompassRose(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
   ctx.save();

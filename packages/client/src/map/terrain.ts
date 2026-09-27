@@ -90,8 +90,11 @@ function scatterFineTexture(ctx: CanvasRenderingContext2D, rng: () => number, x0
 }
 
 /** A smooth mountain ridge silhouette (quadratic curves, not a jagged zigzag),
- * with directional shading, a cast ground shadow, and scree/snow caps. */
-function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0: number, yBase: number, length: number, peakHeight: number, hostile: boolean) {
+ * with directional shading, a cast ground shadow, and scree/snow caps.
+ * `haze` (0..1) fades and cools the range toward a pale atmospheric blue-grey
+ * as if it's further away — the single biggest trick for making the wider
+ * world feel huge instead of flat. */
+function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0: number, yBase: number, length: number, peakHeight: number, hostile: boolean, haze = 0) {
   const segments = Math.max(6, Math.floor(length / 60));
   const step = length / segments;
   const points: Vector2[] = [{ x: x0, y: yBase }];
@@ -119,7 +122,7 @@ function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0:
   ctx.lineTo(x0 + length + peakHeight * 0.4, yBase + peakHeight * 0.15);
   ctx.lineTo(x0 + peakHeight * 0.4, yBase + peakHeight * 0.15);
   ctx.closePath();
-  ctx.fillStyle = "rgba(10,8,6,0.18)";
+  ctx.fillStyle = `rgba(10,8,6,${0.18 * (1 - haze * 0.8)})`;
   ctx.fill();
   ctx.restore();
 
@@ -142,14 +145,21 @@ function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0:
   vgrad.addColorStop(1, "rgba(0,0,0,0.25)");
   ctx.fillStyle = vgrad;
   ctx.fill();
-  ctx.strokeStyle = "rgba(15,12,9,0.5)";
+
+  // atmospheric haze: fade + cool toward a pale blue-grey the further away
+  // this range is meant to read, and soften/lighten the outline to match
+  if (haze > 0) {
+    ctx.fillStyle = `rgba(150,165,180,${haze * 0.75})`;
+    ctx.fill();
+  }
+  ctx.strokeStyle = `rgba(15,12,9,${0.5 * (1 - haze * 0.85)})`;
   ctx.lineWidth = 1.2;
   ctx.beginPath();
   smoothPath();
   ctx.stroke();
 
   // snow/scree caps on the taller peaks
-  ctx.fillStyle = "rgba(215,210,200,0.28)";
+  ctx.fillStyle = `rgba(215,210,200,${0.28 * (1 - haze * 0.4)})`;
   for (let i = 1; i < points.length - 1; i++) {
     const p = points[i];
     if (yBase - p.y > peakHeight * 0.65) {
@@ -160,6 +170,106 @@ function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0:
       ctx.fill();
     }
   }
+}
+
+/** A shaded rock outcrop cluster — angular boulders with a highlight/shadow
+ * pair per rock, reads as real 3-D rock rather than a flat colored blob. */
+function drawRockOutcrop(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number) {
+  const rocks = 3 + Math.floor(rng() * 4);
+  for (let i = 0; i < rocks; i++) {
+    const x = cx + (rng() - 0.5) * 26;
+    const y = cy + (rng() - 0.5) * 18;
+    const r = 4 + rng() * 7;
+    const sides = 5 + Math.floor(rng() * 3);
+    ctx.beginPath();
+    for (let s = 0; s < sides; s++) {
+      const a = (s / sides) * Math.PI * 2 + rng() * 0.3;
+      const rr = r * (0.8 + rng() * 0.3);
+      const px = x + Math.cos(a) * rr;
+      const py = y + Math.sin(a) * rr * 0.8;
+      if (s === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = "rgba(90,80,68,0.55)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(40,34,26,0.5)";
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    // upper-left highlight facet for a sense of volume
+    ctx.beginPath();
+    ctx.ellipse(x - r * 0.25, y - r * 0.3, r * 0.4, r * 0.25, -0.4, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(160,148,124,0.3)";
+    ctx.fill();
+  }
+}
+
+/** A dry stream bed: a branching cracked channel cut into the ground. */
+function drawWadi(ctx: CanvasRenderingContext2D, rng: () => number, startX: number, startY: number, dirX: number, dirY: number, length: number) {
+  let x = startX;
+  let y = startY;
+  let dx = dirX;
+  let dy = dirY;
+  ctx.strokeStyle = "rgba(20,16,12,0.35)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  const steps = 10;
+  for (let i = 0; i < steps; i++) {
+    dx += (rng() - 0.5) * 0.6;
+    dy += (rng() - 0.5) * 0.6;
+    const norm = Math.hypot(dx, dy) || 1;
+    dx /= norm;
+    dy /= norm;
+    x += dx * (length / steps);
+    y += dy * (length / steps);
+    ctx.lineTo(x, y);
+    if (i === Math.floor(steps / 2) && rng() > 0.4) {
+      // a small branch
+      ctx.moveTo(x, y);
+      const bx = x + dy * (length * 0.25) * (rng() > 0.5 ? 1 : -1);
+      const by = y - dx * (length * 0.25) * (rng() > 0.5 ? 1 : -1);
+      ctx.lineTo(bx, by);
+      ctx.moveTo(x, y);
+    }
+  }
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(110,96,72,0.2)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+/** A dry, cracked lakebed patch — a very recognizable arid-terrain signature. */
+function drawCrackedEarthPatch(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number, radius: number) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, radius, radius * 0.65, 0, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.fillStyle = "rgba(150,132,100,0.22)";
+  ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+
+  // a rough polygon "cell" network of crack lines
+  const cells = 10 + Math.floor(rng() * 6);
+  const centers: Vector2[] = [];
+  for (let i = 0; i < cells; i++) {
+    centers.push({ x: cx + (rng() - 0.5) * radius * 1.8, y: cy + (rng() - 0.5) * radius * 1.2 });
+  }
+  ctx.strokeStyle = "rgba(30,24,18,0.4)";
+  ctx.lineWidth = 0.8;
+  for (const p of centers) {
+    // connect each center to its two nearest neighbors for a crackle look
+    const others = centers
+      .filter((q) => q !== p)
+      .sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y))
+      .slice(0, 2);
+    for (const o of others) {
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(o.x, o.y);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 /** Small decorative rural compound (non-interactive terrain dressing). Optionally ruined. */
@@ -383,18 +493,20 @@ function drawGrid(ctx: CanvasRenderingContext2D, x0: number, y0: number, w: numb
   }
 }
 
+/** The river's course through the action area (exported so the live render
+ * loop can place animated sparkle glints along the exact same path). */
+export const RIVER_POINTS: Vector2[] = [
+  { x: 40, y: 480 },
+  { x: 180, y: 430 },
+  { x: 260, y: 460 },
+  { x: 340, y: 400 },
+  { x: 420, y: 380 },
+  { x: 500, y: 330 },
+  { x: 600, y: 300 },
+];
+
 function drawRiver(ctx: CanvasRenderingContext2D) {
-  const points: Vector2[] = [
-    { x: ACTION_CENTER.x - 1600, y: ACTION_H + 220 },
-    { x: 40, y: 480 },
-    { x: 180, y: 430 },
-    { x: 260, y: 460 },
-    { x: 340, y: 400 },
-    { x: 420, y: 380 },
-    { x: 500, y: 330 },
-    { x: 600, y: 300 },
-    { x: ACTION_W + 900, y: 40 },
-  ];
+  const points: Vector2[] = [{ x: ACTION_CENTER.x - 1600, y: ACTION_H + 220 }, ...RIVER_POINTS, { x: ACTION_W + 900, y: 40 }];
   const draw = (width: number, style: string) => {
     ctx.beginPath();
     ctx.moveTo(points[0].x, points[0].y);
@@ -454,15 +566,7 @@ function drawRoad(ctx: CanvasRenderingContext2D, bases: Base[]) {
 }
 
 function drawRiverVegetation(ctx: CanvasRenderingContext2D, rng: () => number) {
-  const points: Vector2[] = [
-    { x: 40, y: 480 },
-    { x: 180, y: 430 },
-    { x: 260, y: 460 },
-    { x: 340, y: 400 },
-    { x: 420, y: 380 },
-    { x: 500, y: 330 },
-    { x: 600, y: 300 },
-  ];
+  const points = RIVER_POINTS;
   for (let i = 0; i < points.length - 1; i++) {
     const steps = 4;
     for (let s = 0; s < steps; s++) {
@@ -523,14 +627,34 @@ export function buildTerrainLayer(regions: Region[], bases: Base[]): TerrainLaye
   for (const [x0, yBase, length, peak, hostile] of closeRanges) {
     drawMountainRange(ctx, rng, x0, yBase, length, peak, hostile);
   }
-  const rangeCount = 12;
+  // scattered further out, with atmospheric haze scaling by distance from
+  // the action area — this is what sells "huge landscape" over "flat prop"
+  const maxHazeDist = Math.hypot(WORLD_W, WORLD_H) / 2;
+  const rangeCount = 16;
   for (let i = 0; i < rangeCount; i++) {
     const x0 = WORLD_MIN.x + rng() * WORLD_W * 0.9;
     const yBase = WORLD_MIN.y + rng() * WORLD_H;
     const length = 300 + rng() * 700;
     const peak = 60 + rng() * 140;
-    drawMountainRange(ctx, rng, x0, yBase, length, peak, rng() > 0.5);
+    const dist = Math.hypot(x0 + length / 2 - ACTION_CENTER.x, yBase - ACTION_CENTER.y);
+    const haze = Math.min(0.85, (dist / maxHazeDist) * 1.4);
+    drawMountainRange(ctx, rng, x0, yBase, length, peak, rng() > 0.5, haze);
   }
+
+  // rock outcrops and dry wadi channels — real ground detail, not just color
+  for (let i = 0; i < 30; i++) {
+    const x = WORLD_MIN.x + rng() * WORLD_W;
+    const y = WORLD_MIN.y + rng() * WORLD_H;
+    drawRockOutcrop(ctx, rng, x, y);
+  }
+  for (let i = 0; i < 8; i++) {
+    const x = WORLD_MIN.x + rng() * WORLD_W;
+    const y = WORLD_MIN.y + rng() * WORLD_H;
+    const angle = rng() * Math.PI * 2;
+    drawWadi(ctx, rng, x, y, Math.cos(angle), Math.sin(angle), 140 + rng() * 220);
+  }
+  drawCrackedEarthPatch(ctx, rng, ACTION_CENTER.x - 1400, ACTION_CENTER.y + 500, 180);
+  drawCrackedEarthPatch(ctx, rng, ACTION_CENTER.x + 1700, ACTION_CENTER.y - 700, 220);
 
   // scattered decorative compounds — mostly ruined near the front, intact
   // further out — inhabiting both the action area and the wider world

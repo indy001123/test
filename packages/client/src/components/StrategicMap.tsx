@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { CampaignState, Vector2 } from "@frontline/shared";
 import { TICKS_PER_SEC } from "@frontline/shared";
-import { ACTION_CENTER, ACTION_H, ACTION_W, WORLD_MAX, WORLD_MIN, buildTerrainLayer, type TerrainLayer } from "../map/terrain";
+import { ACTION_CENTER, ACTION_H, ACTION_W, RIVER_POINTS, WORLD_MAX, WORLD_MIN, buildTerrainLayer, type TerrainLayer } from "../map/terrain";
 import { drawBaseIcon, drawContactIcon, drawConvoyIcon, drawScaleBar, drawUnitIcon, unitColor } from "../map/icons";
-import { drawCloudShadows, drawCompassRose, drawSmokeWisp } from "../map/effects";
+import { drawCloudShadows, drawCompassRose, drawRiverSparkle, drawSmokeWisp } from "../map/effects";
 
 const CLOUD_SHADOWS = [
   { x: ACTION_CENTER.x - 400, y: ACTION_CENTER.y - 300, r: 220, speed: 0.004 },
@@ -171,6 +171,7 @@ export default function StrategicMap({
       if (terrain) {
         ctx!.drawImage(terrain.canvas, WORLD_MIN.x, WORLD_MIN.y, WORLD_MAX.x - WORLD_MIN.x, WORLD_MAX.y - WORLD_MIN.y);
         drawCloudShadows(ctx!, CLOUD_SHADOWS, now);
+        drawRiverSparkle(ctx!, RIVER_POINTS, now);
         for (let i = 0; i < terrain.smokeSources.length; i++) {
           drawSmokeWisp(ctx!, terrain.smokeSources[i], now, i);
         }
