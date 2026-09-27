@@ -304,6 +304,65 @@ function drawFrontLine(ctx: CanvasRenderingContext2D, rng: () => number, smokeSo
   }
 }
 
+/** Small shrub cluster — used to green up the riverbank against the dry ground. */
+function drawShrub(ctx: CanvasRenderingContext2D, rng: () => number, cx: number, cy: number) {
+  const clumps = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < clumps; i++) {
+    const x = cx + (rng() - 0.5) * 10;
+    const y = cy + (rng() - 0.5) * 6;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 3 + rng() * 3, 2 + rng() * 2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${70 + rng() * 20 | 0},${95 + rng() * 25 | 0},${55 + rng() * 15 | 0},0.4)`;
+    ctx.fill();
+  }
+}
+
+/** A small roadside utility pole with a crossbar and sagging wire to the next one. */
+function drawUtilityPole(ctx: CanvasRenderingContext2D, x: number, y: number, nextX: number, nextY: number) {
+  ctx.strokeStyle = "rgba(40,34,26,0.55)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x, y - 11);
+  ctx.moveTo(x - 4, y - 9);
+  ctx.lineTo(x + 4, y - 9);
+  ctx.stroke();
+  const midX = (x + nextX) / 2;
+  const midY = (y + nextY) / 2 - 8;
+  ctx.strokeStyle = "rgba(60,55,45,0.3)";
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 9);
+  ctx.quadraticCurveTo(midX, midY - 9, nextX, nextY - 9);
+  ctx.stroke();
+}
+
+/** A small dug-in border checkpoint post: watchtower silhouette + a short fence run. */
+function drawCheckpointPost(ctx: CanvasRenderingContext2D, cx: number, cy: number, hostile: boolean) {
+  const color = hostile ? "rgba(150,90,80,0.6)" : "rgba(110,140,170,0.6)";
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.strokeStyle = "rgba(60,52,40,0.5)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-16, 3);
+  ctx.lineTo(16, 3);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(20,17,13,0.7)";
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.rect(-4, -10, 8, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-6, -10);
+  ctx.lineTo(0, -16);
+  ctx.lineTo(6, -10);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawGrid(ctx: CanvasRenderingContext2D, x0: number, y0: number, w: number, h: number) {
   ctx.strokeStyle = "rgba(180,190,170,0.045)";
   ctx.lineWidth = 1;
@@ -377,6 +436,56 @@ function drawRoad(ctx: CanvasRenderingContext2D, bases: Base[]) {
     ctx.stroke();
     ctx.setLineDash([]);
   }
+
+  // roadside utility poles along the main Alpha-Bravo stretch
+  const [pa, pb] = [a.position, b.position];
+  const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+  const poleCount = Math.floor(dist / 55);
+  const nx = -(pb.y - pa.y) / dist;
+  const ny = (pb.x - pa.x) / dist;
+  const points: Vector2[] = [];
+  for (let i = 0; i <= poleCount; i++) {
+    const t = i / poleCount;
+    points.push({ x: pa.x + (pb.x - pa.x) * t + nx * 14, y: pa.y + (pb.y - pa.y) * t + ny * 14 });
+  }
+  for (let i = 0; i < points.length - 1; i++) {
+    drawUtilityPole(ctx, points[i].x, points[i].y, points[i + 1].x, points[i + 1].y);
+  }
+}
+
+function drawRiverVegetation(ctx: CanvasRenderingContext2D, rng: () => number) {
+  const points: Vector2[] = [
+    { x: 40, y: 480 },
+    { x: 180, y: 430 },
+    { x: 260, y: 460 },
+    { x: 340, y: 400 },
+    { x: 420, y: 380 },
+    { x: 500, y: 330 },
+    { x: 600, y: 300 },
+  ];
+  for (let i = 0; i < points.length - 1; i++) {
+    const steps = 4;
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps;
+      const x = points[i].x + (points[i + 1].x - points[i].x) * t;
+      const y = points[i].y + (points[i + 1].y - points[i].y) * t;
+      const side = rng() > 0.5 ? 1 : -1;
+      if (rng() > 0.35) drawShrub(ctx, rng, x + side * (10 + rng() * 8), y + side * (4 + rng() * 4));
+    }
+  }
+}
+
+/** Guard posts spaced along the contested region border, matching the
+ * spec's "checkpoints" — dug-in on both sides, not just a line on the map. */
+function drawBorderCheckpoints(ctx: CanvasRenderingContext2D) {
+  const friendlySide = FRONT_X - 40;
+  const hostileSide = FRONT_X + 38;
+  const positions = [80, 220, 380, 520];
+  for (const y of positions) {
+    if (y < 0 || y > ACTION_H) continue;
+    drawCheckpointPost(ctx, friendlySide, y, false);
+    drawCheckpointPost(ctx, hostileSide, y + 60, true);
+  }
 }
 
 export interface TerrainLayer {
@@ -438,6 +547,8 @@ export function buildTerrainLayer(regions: Region[], bases: Base[]): TerrainLaye
   drawGrid(ctx, WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
   drawRoad(ctx, bases);
   drawRiver(ctx);
+  drawRiverVegetation(ctx, rng);
+  drawBorderCheckpoints(ctx);
   drawFrontLine(ctx, rng, smokeSources);
 
   // region borders + labels only — no flat color wash over the terrain

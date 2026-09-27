@@ -28,7 +28,7 @@ export function drawUnitIcon(
   pos: Vector2,
   type: UnitCategory,
   color: string,
-  opts: { selected: boolean; dim: boolean }
+  opts: { selected: boolean; dim: boolean; timeMs?: number }
 ) {
   drawGroundShadow(ctx, pos, 8, 3);
   ctx.save();
@@ -38,13 +38,19 @@ export function drawUnitIcon(
   ctx.strokeStyle = darken(color, 0.55);
   ctx.lineWidth = 1;
 
+  // per-unit animation phase derived from its own position, so idle motion
+  // doesn't look identical/synchronized across every unit on the map
+  const seed = (pos.x * 12.9898 + pos.y * 78.233) % 1000;
+  const t = ((opts.timeMs ?? 0) / 900 + seed) % (Math.PI * 2);
+
   switch (type) {
     case "infantry": {
-      // fireteam: a loose cluster of three soldiers seen from above
+      // fireteam: a loose cluster of three soldiers seen from above, with a
+      // faint idle sway so the formation reads as alive, not a static decal
       const dots: Vector2[] = [
-        { x: -4, y: 3 },
-        { x: 3, y: 5 },
-        { x: 0, y: -4 },
+        { x: -4 + Math.sin(t) * 0.6, y: 3 + Math.cos(t * 0.8) * 0.6 },
+        { x: 3 + Math.sin(t + 2) * 0.6, y: 5 + Math.cos(t * 0.8 + 2) * 0.6 },
+        { x: 0 + Math.sin(t + 4) * 0.6, y: -4 + Math.cos(t * 0.8 + 4) * 0.6 },
       ];
       for (const d of dots) {
         ctx.beginPath();
@@ -151,14 +157,26 @@ export function drawUnitIcon(
   ctx.restore();
 }
 
-/** Fog-of-war hostile marker: uncertainty reads through opacity/dash, not a hard NATO frame. */
-export function drawContactIcon(ctx: CanvasRenderingContext2D, pos: Vector2, status: ContactStatus, size = 9) {
+/** Fog-of-war hostile marker: uncertainty reads through opacity/dash, not a hard NATO frame.
+ * A confirmed contact pulses a slow radar-style ping ring to draw the eye. */
+export function drawContactIcon(ctx: CanvasRenderingContext2D, pos: Vector2, status: ContactStatus, timeMs = 0, size = 9) {
   const color = CONTACT_COLOR[status];
   const certainty = status === "confirmed" ? 1 : status === "probable" ? 0.75 : status === "suspected" ? 0.45 : 0.3;
   ctx.save();
   ctx.translate(pos.x, pos.y);
-  ctx.globalAlpha = certainty;
 
+  if (status === "confirmed") {
+    const loopMs = 2200;
+    const phase = (timeMs % loopMs) / loopMs;
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 0.55 + phase * 14, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = (1 - phase) * 0.5;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = certainty;
   ctx.strokeStyle = color;
   ctx.lineWidth = status === "confirmed" ? 2 : 1.4;
   if (status !== "confirmed") ctx.setLineDash([2.5, 2.5]);
@@ -178,11 +196,21 @@ export function drawContactIcon(ctx: CanvasRenderingContext2D, pos: Vector2, sta
   ctx.restore();
 }
 
-/** Walled compound: perimeter, corner watchtowers, gate, a few buildings, helipad. */
+function hashSeed(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/** Walled compound: perimeter, corner watchtowers, gate, a few buildings, helipad.
+ * Layout varies per base (seeded by id) so two bases don't look identical, and a
+ * forward/exposed base reads as more dug-in (sandbags, fewer soft buildings). */
 export function drawBaseIcon(ctx: CanvasRenderingContext2D, base: Base) {
   const { x, y } = base.position;
   const half = 30;
   const color = base.isIsolated ? "#e0453a" : "#4a86e0";
+  const seed = hashSeed(base.id);
+  const forward = seed % 2 === 0; // alternates depot-style vs. forward-defensive layout
 
   drawGroundShadow(ctx, base.position, half + 8, half * 0.4);
 
@@ -205,6 +233,21 @@ export function drawBaseIcon(ctx: CanvasRenderingContext2D, base: Base) {
   ctx.lineTo(6, half);
   ctx.stroke();
 
+  if (forward) {
+    // sandbag emplacements flanking the gate — dug-in, exposed posture
+    ctx.fillStyle = "rgba(150,132,96,0.6)";
+    ctx.strokeStyle = "rgba(90,78,58,0.6)";
+    ctx.lineWidth = 0.7;
+    for (const sx of [-10, 10]) {
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.ellipse(sx + i * 3, half - 3, 2.4, 1.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+  }
+
   // corner watchtowers
   ctx.fillStyle = "rgba(8,13,19,0.9)";
   ctx.strokeStyle = color;
@@ -221,12 +264,18 @@ export function drawBaseIcon(ctx: CanvasRenderingContext2D, base: Base) {
     ctx.stroke();
   }
 
-  // a few flat-roofed buildings inside the compound
-  const buildings: [number, number, number, number][] = [
-    [-18, -14, 16, 12],
-    [2, -18, 20, 10],
-    [-16, 6, 14, 14],
-  ];
+  // buildings: a fuller depot layout, or a sparser forward-post layout
+  const buildings: [number, number, number, number][] = forward
+    ? [
+        [-18, -16, 14, 10],
+        [4, -18, 16, 9],
+      ]
+    : [
+        [-18, -14, 16, 12],
+        [2, -18, 20, 10],
+        [-16, 6, 14, 14],
+        [4, 4, 12, 10],
+      ];
   ctx.fillStyle = "#8a7a58";
   ctx.strokeStyle = "#4a4030";
   ctx.lineWidth = 1;
@@ -234,6 +283,38 @@ export function drawBaseIcon(ctx: CanvasRenderingContext2D, base: Base) {
     ctx.fillRect(bx, by, bw, bh);
     ctx.strokeRect(bx, by, bw, bh);
   }
+
+  // radio antenna mast (depot variant) or a fuel/water tank (either)
+  if (!forward) {
+    ctx.strokeStyle = "rgba(200,200,195,0.6)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-22, 18);
+    ctx.lineTo(-22, -2);
+    ctx.stroke();
+    for (const dy of [-2, 4, 10]) {
+      ctx.beginPath();
+      ctx.moveTo(-25, dy);
+      ctx.lineTo(-19, dy);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.ellipse(20, -6, 5, 6, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "#6b6050";
+    ctx.strokeStyle = "#3a352a";
+    ctx.lineWidth = 1;
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // a parked vehicle stub inside the wire
+  ctx.fillStyle = "rgba(70,80,85,0.7)";
+  ctx.strokeStyle = "rgba(30,34,36,0.6)";
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.roundRect(-20, -6, 8, 5, 1);
+  ctx.fill();
+  ctx.stroke();
 
   // helipad
   ctx.beginPath();
@@ -264,6 +345,44 @@ export function drawBaseIcon(ctx: CanvasRenderingContext2D, base: Base) {
   ctx.strokeStyle = "rgba(255,255,255,0.15)";
   ctx.lineWidth = 1;
   ctx.strokeRect(x - 18, y + half + 8, 36, 5);
+}
+
+/** Convoy marker: a small truck oriented toward its destination, trailing dust. */
+export function drawConvoyIcon(ctx: CanvasRenderingContext2D, pos: Vector2, headingRad: number, delayed: boolean) {
+  const color = delayed ? "#e0a63a" : "#e0c43a";
+
+  // dust trail behind the direction of travel
+  for (let i = 1; i <= 4; i++) {
+    const back = i * 5;
+    const bx = pos.x - Math.cos(headingRad) * back;
+    const by = pos.y - Math.sin(headingRad) * back;
+    ctx.beginPath();
+    ctx.arc(bx, by, 2.5 + i * 0.6, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(190,175,145,${0.16 - i * 0.03})`;
+    ctx.fill();
+  }
+
+  drawGroundShadow(ctx, pos, 7, 3);
+  ctx.save();
+  ctx.translate(pos.x, pos.y);
+  ctx.rotate(headingRad);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = darken(color, 0.5);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(-6, -3.5, 12, 7, 1.5);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = darken(color, 0.35);
+  ctx.fillRect(4, -3, 3, 6);
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(0, 0, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.restore();
 }
 
 export function drawScaleBar(ctx: CanvasRenderingContext2D, viewW: number, viewH: number, worldUnitsPerBar: number) {

@@ -2,8 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import type { CampaignState, Vector2 } from "@frontline/shared";
 import { TICKS_PER_SEC } from "@frontline/shared";
 import { ACTION_CENTER, ACTION_H, ACTION_W, WORLD_MAX, WORLD_MIN, buildTerrainLayer, type TerrainLayer } from "../map/terrain";
-import { drawBaseIcon, drawContactIcon, drawScaleBar, drawUnitIcon, unitColor } from "../map/icons";
-import { drawSmokeWisp } from "../map/effects";
+import { drawBaseIcon, drawContactIcon, drawConvoyIcon, drawScaleBar, drawUnitIcon, unitColor } from "../map/icons";
+import { drawCloudShadows, drawCompassRose, drawSmokeWisp } from "../map/effects";
+
+const CLOUD_SHADOWS = [
+  { x: ACTION_CENTER.x - 400, y: ACTION_CENTER.y - 300, r: 220, speed: 0.004 },
+  { x: ACTION_CENTER.x + 300, y: ACTION_CENTER.y + 150, r: 160, speed: 0.006 },
+  { x: ACTION_CENTER.x - 100, y: ACTION_CENTER.y + 400, r: 260, speed: 0.003 },
+];
 
 const TICK_MS = 1000 / TICKS_PER_SEC;
 const MIN_ZOOM = 0.12;
@@ -164,12 +170,13 @@ export default function StrategicMap({
 
       if (terrain) {
         ctx!.drawImage(terrain.canvas, WORLD_MIN.x, WORLD_MIN.y, WORLD_MAX.x - WORLD_MIN.x, WORLD_MAX.y - WORLD_MIN.y);
+        drawCloudShadows(ctx!, CLOUD_SHADOWS, now);
         for (let i = 0; i < terrain.smokeSources.length; i++) {
           drawSmokeWisp(ctx!, terrain.smokeSources[i], now, i);
         }
       }
 
-      // convoy route lines + moving marker
+      // convoy route lines + moving truck marker (oriented toward destination)
       for (const convoy of s.convoys) {
         const from = s.bases.find((b) => b.id === convoy.fromBaseId);
         const to = s.bases.find((b) => b.id === convoy.toBaseId);
@@ -184,13 +191,8 @@ export default function StrategicMap({
           ctx!.setLineDash([]);
         }
         const pos = interpolated(convoy.id, convoy.position, prevSnap, curSnap, "convoys", t);
-        ctx!.beginPath();
-        ctx!.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
-        ctx!.fillStyle = convoy.status === "delayed" ? "#e0a63a" : "#e0c43a";
-        ctx!.shadowColor = convoy.status === "delayed" ? "#e0a63a" : "#e0c43a";
-        ctx!.shadowBlur = 6;
-        ctx!.fill();
-        ctx!.shadowBlur = 0;
+        const heading = from && to ? Math.atan2(to.position.y - from.position.y, to.position.x - from.position.x) : 0;
+        drawConvoyIcon(ctx!, pos, heading, convoy.status === "delayed");
       }
 
       for (const base of s.bases) drawBaseIcon(ctx!, base);
@@ -198,7 +200,7 @@ export default function StrategicMap({
       for (const contact of s.contacts) {
         if (contact.status === "lost" && s.tick - contact.lastSeenTick > 40) continue;
         const pos = interpolated(contact.id, contact.position, prevSnap, curSnap, "contacts", t);
-        drawContactIcon(ctx!, pos, contact.status);
+        drawContactIcon(ctx!, pos, contact.status, now);
         ctx!.font = "10px ui-monospace, Consolas, monospace";
         const label = `${contact.status.toUpperCase()} ${Math.round(contact.confidence)}%`;
         const w = ctx!.measureText(label).width;
@@ -212,7 +214,7 @@ export default function StrategicMap({
         const isMine = unit.role === myRoleNow;
         const isSelected = unit.id === selected;
         const pos = interpolated(unit.id, unit.position, prevSnap, curSnap, "units", t);
-        drawUnitIcon(ctx!, pos, unit.type, unitColor(unit.role), { selected: isSelected, dim: !isMine });
+        drawUnitIcon(ctx!, pos, unit.type, unitColor(unit.role), { selected: isSelected, dim: !isMine, timeMs: now });
         if (unit.readiness < 60) {
           ctx!.fillStyle = "#e0a63a";
           ctx!.font = "bold 11px ui-monospace, Consolas, monospace";
@@ -235,6 +237,7 @@ export default function StrategicMap({
       ctx!.globalCompositeOperation = "source-over";
 
       drawScaleBar(ctx!, cssW, cssH, 120 / cam.zoom);
+      drawCompassRose(ctx!, 34, 34);
       if (targeting) {
         ctx!.fillStyle = "rgba(58,208,224,0.05)";
         ctx!.fillRect(0, 0, cssW, cssH);
