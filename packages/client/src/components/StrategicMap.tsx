@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { CampaignState, Vector2 } from "@frontline/shared";
 import { TICKS_PER_SEC } from "@frontline/shared";
-import { ACTION_CENTER, ACTION_H, ACTION_W, WORLD_MAX, WORLD_MIN, buildTerrainLayer } from "../map/terrain";
+import { ACTION_CENTER, ACTION_H, ACTION_W, WORLD_MAX, WORLD_MIN, buildTerrainLayer, type TerrainLayer } from "../map/terrain";
 import { drawBaseIcon, drawContactIcon, drawScaleBar, drawUnitIcon, unitColor } from "../map/icons";
+import { drawSmokeWisp } from "../map/effects";
 
 const TICK_MS = 1000 / TICKS_PER_SEC;
 const MIN_ZOOM = 0.12;
@@ -66,7 +67,7 @@ export default function StrategicMap({
   onMapClick: (pos: Vector2) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const terrainRef = useRef<HTMLCanvasElement | null>(null);
+  const terrainRef = useRef<TerrainLayer | null>(null);
   const prevSnapRef = useRef<Snapshot | null>(null);
   const curSnapRef = useRef<Snapshot | null>(null);
   const stateRef = useRef(state);
@@ -161,7 +162,12 @@ export default function StrategicMap({
       // world-space transform (pan + zoom)
       ctx!.setTransform(dpr * cam.zoom, 0, 0, dpr * cam.zoom, dpr * (cssW / 2 - cam.x * cam.zoom), dpr * (cssH / 2 - cam.y * cam.zoom));
 
-      if (terrain) ctx!.drawImage(terrain, WORLD_MIN.x, WORLD_MIN.y, WORLD_MAX.x - WORLD_MIN.x, WORLD_MAX.y - WORLD_MIN.y);
+      if (terrain) {
+        ctx!.drawImage(terrain.canvas, WORLD_MIN.x, WORLD_MIN.y, WORLD_MAX.x - WORLD_MIN.x, WORLD_MAX.y - WORLD_MIN.y);
+        for (let i = 0; i < terrain.smokeSources.length; i++) {
+          drawSmokeWisp(ctx!, terrain.smokeSources[i], now, i);
+        }
+      }
 
       // convoy route lines + moving marker
       for (const convoy of s.convoys) {
@@ -216,6 +222,18 @@ export default function StrategicMap({
 
       // screen-space overlays (scale bar, targeting tint) — must not scale with zoom
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // cinematic dawn color grade: warm light from the upper-left, cooling
+      // toward the lower-right — cheap, but does a lot for mood/atmosphere
+      const light = ctx!.createLinearGradient(0, 0, cssW, cssH);
+      light.addColorStop(0, "rgba(255,190,120,0.16)");
+      light.addColorStop(0.45, "rgba(255,255,255,0)");
+      light.addColorStop(1, "rgba(60,90,140,0.14)");
+      ctx!.globalCompositeOperation = "overlay";
+      ctx!.fillStyle = light;
+      ctx!.fillRect(0, 0, cssW, cssH);
+      ctx!.globalCompositeOperation = "source-over";
+
       drawScaleBar(ctx!, cssW, cssH, 120 / cam.zoom);
       if (targeting) {
         ctx!.fillStyle = "rgba(58,208,224,0.05)";

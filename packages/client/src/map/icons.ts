@@ -1,4 +1,5 @@
 import type { Base, ContactStatus, UnitCategory, Vector2 } from "@frontline/shared";
+import { drawGroundShadow } from "./effects";
 
 const FRIENDLY_GROUND = "#4fd8e8";
 const FRIENDLY_LOGISTICS = "#e8cc4a";
@@ -29,6 +30,7 @@ export function drawUnitIcon(
   color: string,
   opts: { selected: boolean; dim: boolean }
 ) {
+  drawGroundShadow(ctx, pos, 8, 3);
   ctx.save();
   ctx.translate(pos.x, pos.y);
   ctx.globalAlpha = opts.dim ? 0.55 : 1;
@@ -181,6 +183,9 @@ export function drawBaseIcon(ctx: CanvasRenderingContext2D, base: Base) {
   const { x, y } = base.position;
   const half = 30;
   const color = base.isIsolated ? "#e0453a" : "#4a86e0";
+
+  drawGroundShadow(ctx, base.position, half + 8, half * 0.4);
+
   ctx.save();
   ctx.translate(x, y);
 

@@ -89,7 +89,8 @@ function scatterFineTexture(ctx: CanvasRenderingContext2D, rng: () => number, x0
   }
 }
 
-/** A jagged mountain ridge silhouette with simple shading, drawn along a baseline. */
+/** A smooth mountain ridge silhouette (quadratic curves, not a jagged zigzag),
+ * with directional shading, a cast ground shadow, and scree/snow caps. */
 function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0: number, yBase: number, length: number, peakHeight: number, hostile: boolean) {
   const segments = Math.max(6, Math.floor(length / 60));
   const step = length / segments;
@@ -101,33 +102,61 @@ function drawMountainRange(ctx: CanvasRenderingContext2D, rng: () => number, x0:
   }
   points.push({ x: x0 + length, y: yBase });
 
+  function smoothPath() {
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length - 1; i++) {
+      const midX = (points[i].x + points[i + 1].x) / 2;
+      const midY = (points[i].y + points[i + 1].y) / 2;
+      ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+    }
+    ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
+  }
+
+  // soft ground shadow cast toward the lower-right, as if lit from upper-left
+  ctx.save();
   ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  smoothPath();
+  ctx.lineTo(x0 + length + peakHeight * 0.4, yBase + peakHeight * 0.15);
+  ctx.lineTo(x0 + peakHeight * 0.4, yBase + peakHeight * 0.15);
   ctx.closePath();
-  const grad = ctx.createLinearGradient(0, yBase - peakHeight, 0, yBase);
+  ctx.fillStyle = "rgba(10,8,6,0.18)";
+  ctx.fill();
+  ctx.restore();
+
+  ctx.beginPath();
+  smoothPath();
+  ctx.closePath();
+  // shade darker on the right (away from the light) for a sense of volume
+  const grad = ctx.createLinearGradient(x0, 0, x0 + length, 0);
   if (hostile) {
-    grad.addColorStop(0, "rgba(90,56,46,0.7)");
-    grad.addColorStop(1, "rgba(46,30,26,0.45)");
+    grad.addColorStop(0, "rgba(105,66,54,0.72)");
+    grad.addColorStop(1, "rgba(64,36,30,0.72)");
   } else {
-    grad.addColorStop(0, "rgba(82,72,54,0.65)");
-    grad.addColorStop(1, "rgba(40,36,26,0.4)");
+    grad.addColorStop(0, "rgba(96,84,62,0.68)");
+    grad.addColorStop(1, "rgba(52,44,32,0.68)");
   }
   ctx.fillStyle = grad;
   ctx.fill();
-  ctx.strokeStyle = "rgba(15,12,9,0.55)";
+  const vgrad = ctx.createLinearGradient(0, yBase - peakHeight, 0, yBase);
+  vgrad.addColorStop(0, "rgba(0,0,0,0)");
+  vgrad.addColorStop(1, "rgba(0,0,0,0.25)");
+  ctx.fillStyle = vgrad;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(15,12,9,0.5)";
   ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  smoothPath();
   ctx.stroke();
 
   // snow/scree caps on the taller peaks
-  ctx.fillStyle = "rgba(210,205,195,0.2)";
+  ctx.fillStyle = "rgba(215,210,200,0.28)";
   for (let i = 1; i < points.length - 1; i++) {
     const p = points[i];
-    if (yBase - p.y > peakHeight * 0.7) {
+    if (yBase - p.y > peakHeight * 0.65) {
       ctx.beginPath();
-      ctx.moveTo(p.x - 8, p.y + 10);
-      ctx.lineTo(p.x, p.y);
-      ctx.lineTo(p.x + 8, p.y + 10);
+      ctx.moveTo(p.x - 9, p.y + 12);
+      ctx.quadraticCurveTo(p.x, p.y - 4, p.x + 9, p.y + 12);
+      ctx.quadraticCurveTo(p.x, p.y + 4, p.x - 9, p.y + 12);
       ctx.fill();
     }
   }
@@ -237,8 +266,10 @@ function drawWireLine(ctx: CanvasRenderingContext2D, x: number, y0: number, y1: 
 
 /** The contested boundary between the two regions: trench line, wire, craters,
  * wrecks and dug-in positions — this is what should make the map read as an
- * active front rather than two dots sitting in empty ground. */
-function drawFrontLine(ctx: CanvasRenderingContext2D, rng: () => number) {
+ * active front rather than two dots sitting in empty ground. Wreck positions
+ * are collected into `smokeSources` so the live render loop can drift smoke
+ * off them. */
+function drawFrontLine(ctx: CanvasRenderingContext2D, rng: () => number, smokeSources: Vector2[]) {
   const yTop = 30;
   const yBottom = ACTION_H - 20;
 
@@ -266,7 +297,10 @@ function drawFrontLine(ctx: CanvasRenderingContext2D, rng: () => number) {
     const roll = rng();
     if (roll < 0.4) drawCrater(ctx, rng, x, y);
     else if (roll < 0.65) drawBunker(ctx, rng, x, y);
-    else if (roll < 0.85) drawWreck(ctx, rng, x, y);
+    else if (roll < 0.85) {
+      drawWreck(ctx, rng, x, y);
+      smokeSources.push({ x, y });
+    }
   }
 }
 
@@ -345,13 +379,21 @@ function drawRoad(ctx: CanvasRenderingContext2D, bases: Base[]) {
   }
 }
 
-export function buildTerrainLayer(regions: Region[], bases: Base[]): HTMLCanvasElement {
+export interface TerrainLayer {
+  canvas: HTMLCanvasElement;
+  /** World-space points where the front line placed a burning wreck, so the
+   * live render loop can drift animated smoke off them. */
+  smokeSources: Vector2[];
+}
+
+export function buildTerrainLayer(regions: Region[], bases: Base[]): TerrainLayer {
   const canvas = document.createElement("canvas");
   canvas.width = WORLD_W;
   canvas.height = WORLD_H;
   const ctx = canvas.getContext("2d")!;
   ctx.translate(-WORLD_MIN.x, -WORLD_MIN.y);
   const rng = mulberry32(0xf20a7e1);
+  const smokeSources: Vector2[] = [];
 
   ctx.fillStyle = "#221d15";
   ctx.fillRect(WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
@@ -396,7 +438,7 @@ export function buildTerrainLayer(regions: Region[], bases: Base[]): HTMLCanvasE
   drawGrid(ctx, WORLD_MIN.x, WORLD_MIN.y, WORLD_W, WORLD_H);
   drawRoad(ctx, bases);
   drawRiver(ctx);
-  drawFrontLine(ctx, rng);
+  drawFrontLine(ctx, rng, smokeSources);
 
   // region borders + labels only — no flat color wash over the terrain
   for (const region of regions) {
@@ -436,5 +478,5 @@ export function buildTerrainLayer(regions: Region[], bases: Base[]): HTMLCanvasE
     ctx.fillText(label, region.path[0].x + 10, region.path[0].y + 20);
   }
 
-  return canvas;
+  return { canvas, smokeSources };
 }
