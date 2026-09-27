@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CampaignState, Vector2 } from "@frontline/shared";
 import { TICKS_PER_SEC } from "@frontline/shared";
-import { ACTION_CENTER, ACTION_H, ACTION_W, RIVER_POINTS, WORLD_MAX, WORLD_MIN, buildTerrainLayer, type TerrainLayer } from "../map/terrain";
+import { ACTION_CENTER, ACTION_H, ACTION_W, CHUNK_SIZE, ChunkCache, RIVER_POINTS, WORLD_MAX, WORLD_MIN, chunkIndexAt } from "../map/terrain";
 import { drawBaseIcon, drawContactIcon, drawConvoyIcon, drawScaleBar, drawUnitIcon, unitColor } from "../map/icons";
 import { drawCloudShadows, drawCompassRose, drawRiverSparkle, drawSmokeWisp } from "../map/effects";
 
@@ -73,7 +73,7 @@ export default function StrategicMap({
   onMapClick: (pos: Vector2) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const terrainRef = useRef<TerrainLayer | null>(null);
+  const chunkCacheRef = useRef<ChunkCache | null>(null);
   const prevSnapRef = useRef<Snapshot | null>(null);
   const curSnapRef = useRef<Snapshot | null>(null);
   const stateRef = useRef(state);
@@ -99,10 +99,12 @@ export default function StrategicMap({
     roleRef.current = myRole;
   }, [myRole]);
 
-  // Regions/bases are fixed for the life of a campaign, so the expensive
-  // textured terrain only needs to be rendered once and then blitted.
+  // Regions/bases are fixed for the life of a campaign. Terrain itself is
+  // generated lazily per-chunk (see ChunkCache) as the camera needs it,
+  // rather than all at once — an 8x-bigger world made a single upfront
+  // canvas allocation take multiple seconds, which chunking avoids entirely.
   useEffect(() => {
-    terrainRef.current = buildTerrainLayer(state.regions, state.bases);
+    chunkCacheRef.current = new ChunkCache(state.regions, state.bases);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.campaignId]);
 
@@ -152,7 +154,7 @@ export default function StrategicMap({
       }
       const cam = cameraRef.current;
 
-      const terrain = terrainRef.current;
+      const chunkCache = chunkCacheRef.current;
       const prevSnap = prevSnapRef.current;
       const curSnap = curSnapRef.current;
       const now = performance.now();
@@ -168,12 +170,46 @@ export default function StrategicMap({
       // world-space transform (pan + zoom)
       ctx!.setTransform(dpr * cam.zoom, 0, 0, dpr * cam.zoom, dpr * (cssW / 2 - cam.x * cam.zoom), dpr * (cssH / 2 - cam.y * cam.zoom));
 
-      if (terrain) {
-        ctx!.drawImage(terrain.canvas, WORLD_MIN.x, WORLD_MIN.y, WORLD_MAX.x - WORLD_MIN.x, WORLD_MAX.y - WORLD_MIN.y);
+      if (chunkCache) {
+        // Chunks actually on screen are always generated in full this frame
+        // (never leaving a visible black gap) — a big jump costs however
+        // long its own visible chunks take, same bound the single-canvas
+        // approach had, just scoped to "what's on screen" instead of "the
+        // whole 8x world". Only the one-chunk prefetch margin beyond that
+        // (not yet visible, just smoothing the next pan) is throttled to a
+        // small per-frame budget so it can't add its own unbounded cost.
+        const viewHalfW = cssW / 2 / cam.zoom;
+        const viewHalfH = cssH / 2 / cam.zoom;
+        const topLeft = chunkIndexAt(cam.x - viewHalfW, cam.y - viewHalfH);
+        const bottomRight = chunkIndexAt(cam.x + viewHalfW, cam.y + viewHalfH);
+
+        chunkCache.beginFrame(Infinity);
+        for (let cy = topLeft.cy; cy <= bottomRight.cy; cy++) {
+          for (let cx = topLeft.cx; cx <= bottomRight.cx; cx++) {
+            const chunk = chunkCache.get(cx, cy)!;
+            const originX = WORLD_MIN.x + cx * CHUNK_SIZE;
+            const originY = WORLD_MIN.y + cy * CHUNK_SIZE;
+            ctx!.drawImage(chunk.canvas, originX, originY, CHUNK_SIZE, CHUNK_SIZE);
+          }
+        }
+
+        chunkCache.beginFrame(2);
+        for (let cy = topLeft.cy - 1; cy <= bottomRight.cy + 1; cy++) {
+          for (let cx = topLeft.cx - 1; cx <= bottomRight.cx + 1; cx++) {
+            const isMargin = cx === topLeft.cx - 1 || cx === bottomRight.cx + 1 || cy === topLeft.cy - 1 || cy === bottomRight.cy + 1;
+            if (!isMargin) continue; // core range already drawn above
+            const chunk = chunkCache.get(cx, cy);
+            if (!chunk) continue; // over budget — prefetched on a later frame instead
+            const originX = WORLD_MIN.x + cx * CHUNK_SIZE;
+            const originY = WORLD_MIN.y + cy * CHUNK_SIZE;
+            ctx!.drawImage(chunk.canvas, originX, originY, CHUNK_SIZE, CHUNK_SIZE);
+          }
+        }
         drawCloudShadows(ctx!, CLOUD_SHADOWS, now);
         drawRiverSparkle(ctx!, RIVER_POINTS, now);
-        for (let i = 0; i < terrain.smokeSources.length; i++) {
-          drawSmokeWisp(ctx!, terrain.smokeSources[i], now, i);
+        const smokeSources = chunkCache.allSmokeSources();
+        for (let i = 0; i < smokeSources.length; i++) {
+          drawSmokeWisp(ctx!, smokeSources[i], now, i);
         }
       }
 
